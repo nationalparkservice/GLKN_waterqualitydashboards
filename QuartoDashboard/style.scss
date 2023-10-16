@@ -1,0 +1,49 @@
+
+/*-- scss:rules --*/
+
+.banner {
+  color: white;
+  background-color: black;
+  font-weight: bold;
+  font-size: 36px;
+  text-align: left;
+  text-indent: 50px;
+  height: 70px;
+  line-height: 70px;
+  margin: 0px;
+}
+
+
+.headerImage {
+img {
+    max-width: 100%;
+    height: auto;
+    position: realative
+  }
+}
+
+.title{
+  text-indent: 50px;
+}
+
+.panel-sidebar {
+  color: black;
+  margin: 10px;
+  width: 100%;
+  background-color: gray70 !important;
+}
+
+.panel-input {
+  color: black;
+  background-color: gray70 !important;
+}
+
+.plotly_plots {
+  color: white !important;
+  font-size: 0px;
+}
+
+.plotly_warning {
+  font-size: 30px;
+  color: black;
+}

@@ -1,0 +1,1306 @@
+---
+format:
+  html:
+    embed-resources: true
+    page-layout: custom
+    theme: style.scss
+    minimal: false
+editor: source
+echo: false
+---
+<!--
+GLKN WATER QUALITY VISUALIZER
+Last updated by Hallie Arno, SIP Intern GLKN
+Updated 5 October 2023
+Contact: arno.hallie@gmail.com
+
+CONTENTS
+Chunk 1: NPS Banner (requires scss file to render properly)
+2: Script to choose a random image to display as header from images folder
+3: Placing the header image on the screen
+4: Title text
+5: Password input. If removed, ensure that any "if password == "correct password {}" statements are also removed. Alternatively, leave them in the code, and remove the input, instead defining password as a variable within the code ("ie let password = glkn2023"). 
+6: Get WQP Data using R. 
+7: Import Plotly library. If graphs stop working one day, this link may need to be updated. 
+8: Filter data based on user inputs. 
+9: Plot color scheme input. 
+10: Function to generate scatter plots for a single variable and multiple sites.
+11: Function to generate boxplots for a single variable and multiple sites.
+12: Filtering data to be able to use in profile plots. 
+13: Function to make a profile plot from a single month/ year and variable.
+14: Function that returns secchi depth from the same month, year, and site as profile plot chart above.
+15-22: Map functionality. Creates leaflet map and links map to checkbox inputs. 
+23-24: Placing sidebar inputs on screen.
+25-28 : Tree input function to allow park to be opened/ collapsed. 
+29: Put leaflet map in sidebar. 
+Tabset Panels: 
+30-32: Inputs for main panel
+33-49: Calling function for scatterplots and boxplots
+50-52: Table and download button for data
+53: Inputs for profile plots
+54-57: Calling profile plots for each relevant variable
+58: Informtation tab
+-->
+
+<!--head-->
+
+```{=html}
+<div class="banner">
+  <p>
+    <img src = "images/logo.png" style="vertical-align:middle" height="50">
+    National Park Service
+  </p>
+</div>
+
+```
+
+
+```{ojs}
+//|output: false
+//This code chunk returns a random image (currently placeholders) on load
+//If a different number of images are in the folder, make sure to change the "num" variable
+{
+var imgs = document.getElementsByClassName('myClass1');
+
+  for (var i = 0; i < imgs.length; i++) {
+    var num = Math.floor(Math.random() * 4 + 1);
+    imgs[i].src = 'images/placeholder' + num + '.jpg';
+    imgs[i].alt = imgs[i].src;
+  }
+
+}
+```
+
+
+```{=html}
+<div class = "headerImage">
+  <p>
+  <img src="" class="myClass1" alt="Placeholder alt" width=3000>
+  </p>
+</div>
+```
+
+```{=html}
+<div class = "title">
+  <h1>
+  DRAFT GLKN Water Quality Visualizer
+  </h1>
+</div>
+```
+
+<!--\head-->
+
+```{ojs}
+correct_password = "glkn2023"
+viewof password = Inputs.text({label: " password"})
+```
+
+```{r echo = FALSE, message = FALSE, include = FALSE}
+
+library(lubridate)
+library(data.table)
+library(dataRetrieval)
+
+#Load Packages
+library(tidyverse)
+
+#Filepaths for site names and site metadata
+locations <- read.csv("GLKNStations.csv") %>% # Site names and info for all parks 
+ mutate(GLKNStationID = str_extract(MonitoringLocationIdentifier,"[^\\-]+$"))
+
+#Extract sites from lake parks spreadsheet
+sites_to_get <- locations$MonitoringLocationIdentifier #change to the number of sites
+
+
+#Read WQP Data 
+df <- readWQPqw(c(siteNumbers = sites_to_get,""),'','')  
+
+
+
+#delete any "non-data" results, such as weather obs, comments, air temp, etc. Do this by using "grepl" with "!" (not) to delete any records with "ActivityMediaName"="Air" or "Other". Note: the "|" is "or" and allows selection of multiple items to delete. Deletes whole row.  
+#delete other non-data (subjective) results that have "ActivityMediaName" = "Water". Delete in "CharacteristicName" =  "water apperance (text)" and "wave height" using "!grepl". Deletes whole row.
+vars_to_remove = c("Age", "Carbon, isotope of mass 13", "Chlorophyll/Pheophytin ratio", "External condition (text)", "Head Capsule Width", "Mercury", "Methylmercury(1+)", "Sex (choice list)", "Weight")
+
+
+
+dt <- data.table(df) %>% 
+  filter(!grepl("Quality Control", ActivityTypeCode)) %>% 
+  filter(!grepl("Air|Other", ActivityMediaName)) %>% 
+  filter(!grepl("Wave height|Water appearance", CharacteristicName)) %>% 
+  filter(!grepl("Length", CharacteristicName)) %>% 
+  filter(!grepl("-", CharacteristicName)) %>% 
+  subset(!(CharacteristicName %in% vars_to_remove))
+
+
+#When charactersistic name is Phosphorus and is not from the surface, replace w/ "Bottom Phosphorus"
+dt[,CharacteristicName:= fcase(ActivityDepthHeightMeasure.MeasureValue !=0 & CharacteristicName == "Total Phosphorus, mixed forms", "Bottom Phosphorus",
+                               CharacteristicName != "Bottom Phosphorus", CharacteristicName)] 
+
+
+#Select and rename relevant columns
+glknwqp <- dt %>% select(c("ActivityIdentifier", 
+                           "CharacteristicName", 
+                           "ActivityDepthHeightMeasure.MeasureValue", 
+                           "ResultMeasureValue", "ActivityEndDateTime", 
+                           "MonitoringLocationIdentifier", 
+                           "ResultMeasure.MeasureUnitCode")) %>% 
+  
+  mutate(Site = str_extract(MonitoringLocationIdentifier,"[^\\-]+$")) %>% 
+  mutate(Park = substr(Site, 1, 4)) %>% 
+  
+  rename(c("Activity_ID" = "ActivityIdentifier", 
+           "Depth" = "ActivityDepthHeightMeasure.MeasureValue", 
+           "Value" = "ResultMeasureValue",   
+           "DateTime" = "ActivityEndDateTime",
+           "Variable" = "CharacteristicName",
+           "Units" = "ResultMeasure.MeasureUnitCode")) %>%
+  
+  mutate_at(vars("Depth"),~replace_na(.,0))
+
+
+# Add lat long
+locations <- locations %>% select(GLKNStationID, LatitudeMeasure, LongitudeMeasure, StationName, Park)
+
+colnames(locations) <- c("glknid", "Latitude", "Longitude", "Name", "Park")
+
+
+df <- merge(glknwqp, locations, by.x = "Site", by.y = "glknid", all.x = TRUE)
+
+df <- df %>% 
+    mutate(Value = as.numeric(Value)) %>% 
+    mutate(Date = as.Date(DateTime)) %>% 
+    mutate(Hour = hour(DateTime)) %>% 
+    mutate(Minute = minute(DateTime)) %>% 
+    mutate(Time = paste0(Hour, ":", Minute, " (UTC)")) %>% 
+    select(-c(Hour, Minute, DateTime, MonitoringLocationIdentifier, Activity_ID)) %>%  
+    mutate(Date = as.character(Date)) %>% 
+    mutate(Year = year(Date)) %>% 
+    mutate(Month = month(Date)) 
+
+ df <- df[order(-df$Depth), ] #this is for profile plots. It *seems* to not be impacting other plots. I really don't want to try to do this in js. 
+
+ojs_define(data = transpose(df))
+ojs_define(station = transpose(locations))
+```
+
+
+```{ojs}
+//| echo: false
+Plotly = require("https://cdn.plot.ly/plotly-2.16.1.min.js")
+```
+
+```{ojs}
+//| echo: false
+//| output: false
+ 
+// Filter based on inputs.
+
+filtered = data.filter(function(waterFilter) {
+  return yearIn[0] <= waterFilter.Year &&
+         yearIn[1] >= waterFilter.Year &&
+         depthIn[0] <= waterFilter.Depth &&
+         depthIn[1] >= waterFilter.Depth &&
+         monthIn[0] <= waterFilter.Month &&
+         monthIn[1] >= waterFilter.Month &&
+         varname.includes(waterFilter.Variable) &&
+         site.includes(waterFilter.Name);
+})
+```
+
+
+
+```{ojs}
+//|output: false
+//Bulding color schemes for drop-down menu
+colors =  {  
+    if (color_input == "default") {
+      return ['#1f77b4',  '#ff7f0e',  '#2ca02c',  '#d62728',  '#9467bd',  '#8c564b',  '#e377c2',  '#7f7f7f',  '#bcbd22',  '#17becf',
+                    '#1f77b4',  '#ff7f0e',  '#2ca02c',  '#d62728',  '#9467bd',  '#8c564b',  '#e377c2',  '#7f7f7f',  '#bcbd22',  '#17becf'];  
+    } else if (color_input == "natural")  {
+      return ['#378F8D', '#BADAF5', '#E5E2B2', '#C9AADB', '#AB5B26', '#00295B', '#006B46', '#BF7C9C', '#DBB600', '#F59E28',
+      '#378F8D', '#BADAF5', '#E5E2B2', '#C9AADB', '#AB5B26', '#00295B', '#006B46', '#BF7C9C', '#DBB600', '#F59E28'];
+    } else if (color_input == "roygbiv") {
+      return['#F30109', '#FF6C00', '#FFEC00', '#00E526', '#3700E6', '#6B00E5', '#BC1EE6'];
+    } else if (color_input == "sunset") {
+      return['#D52D00', '#EF7627', '#FF9A56', '#D162A4', '#B55690', '#A30262'];
+    } else if (color_input == "greyscale") {
+      return['#2B2B2B', '#D4D4D4', '#545454', '#C9C9C9', '#828282', '#ADADAD'];
+    } else if (color_input == "NPS") {
+      return['#2C4A1E', '#C56C39', '#B9B6C1', '#0F4F7E', '#8E9A4C', '#000000'];
+    } else if (color_input == "viridis") {
+      return['#440154', '#FDE725', '#6DCD59', '#3E4A89', '#1F9E89', '#482878', '#B4DE2C', '#31688E', '#26828E', '#35B779'];
+    }
+  }
+
+```
+<!---
+Time Series
+-->
+
+```{ojs}
+//| echo: false
+//|output: false
+
+//Function to make scatter plots based on variable input.
+function var_Plot(var_name) {
+  if (password === correct_password) {
+    let holder = [] 
+    let holdercount = 0 
+  
+    let datalist = []
+    let layoutlist = []
+    let divlist = []
+
+  
+    let thisvar = var_name;
+    
+    if (typeof thisvar !== "undefined") { //make sure it is not undefined to avoid errors
+      
+      let df = filtered.filter(function(tracefilter){ //filter so that one variable at a time is used in each TRACE
+        return thisvar.includes(tracefilter.Variable);
+      })
+      
+      for (let s = 0; s <= site.length; s ++) { //loop through each selected site
+        let thissite = site[s];
+        
+        if (typeof thissite !== "undefined") {
+          let df_site = df.filter(function(sitefilter) { //filter so that one site at a time is used in TRACE
+            return thissite.includes(sitefilter.Name); 
+          })
+        //}  
+        let eachvar_y =     
+          df_site.map(({Value:actualValue})=>actualValue);  //need to turn data into array (list of numbers to display on y-axis)
+      
+        let eachvar_x = 
+          df_site.map(({Date:actualValue})=>actualValue); //list of dates for x axis
+      
+    
+        let eachtrace  = { // make each trace
+          y: eachvar_y,
+          x: eachvar_x,
+       //   xaxis: xnames[i],
+       //s   yaxis: ynames[i],
+          type: 'scatter',
+          mode: 'markers',
+          marker: {
+          color: colors[holdercount] 
+        }, 
+          name: thissite
+        };
+        
+        holder[holdercount] = eachtrace; //put into list
+        holdercount++; 
+        
+        
+        } //if not undefined s close
+      } // s loop close
+      
+      var data = holder;
+
+
+    var layout = {
+      title: {
+      text: var_name,
+      font: {
+          family: 'Arial',
+          size: 14 }
+      },
+       yaxis: {
+        title: 'Value'
+      }, //HERE
+      legend: {xanchor: 'right',
+      bgcolor: '#E2E2E2',
+      bordercolor: '#FFFFFF',
+      borderwidth: 2},
+      autosize: false,
+      width: 500,
+     height: 1000/varname.length,
+      margin: {
+        l: 50,
+        r: 50,
+        b: 30,
+        t: 30,
+        pad: 4
+      }, 
+    };
+
+  
+    const div = DOM.element("div"); //plots
+    Plotly.newPlot(div, data, layout,  {responsive: true});
+    return div; 
+  
+    
+   } // if not undefined i close
+    
+  } //if close
+
+} // function close
+  
+//return var_Plot();
+//} // code block close
+```
+
+<!---
+Boxplot
+-->
+
+```{ojs}
+//|echo: false
+//|output: false
+
+// Function to make boxplots 
+function box_Plot(var_name) {
+  if (password === correct_password) {
+    let thisvar = var_name;
+    
+    if (typeof thisvar !== "undefined") { //make sure it is not undefined to avoid errors
+      
+      let df_var = filtered.filter(function(tracefilter){ //filter so that one variable at a time is used in each TRACE
+        return thisvar.includes(tracefilter.Variable);
+      })
+      
+    let holder = [] 
+
+  
+    for (let i = 0; i <= site.length; i ++) {
+      let thissite = site[i];
+    
+      if (typeof thissite !== "undefined") {
+        let df = df_var.filter(function(tracefilter){
+        return thissite.includes(tracefilter.Name);
+      })
+    
+        let eachvar_y = 
+          df.map(({Value:actualValue})=>actualValue);
+      
+      function get_x(toggle_boxplot) {
+        if (toggle_boxplot == true) {
+         return df.map(({Year:actualValue})=>actualValue);
+        } else {
+          return df.map(({Month:actualValue})=>actualValue);
+        }
+      }
+    
+      let eachtrace  = {
+        y: eachvar_y,
+        x: get_x(toggle_boxplot),
+        type: 'box',
+        name: thissite,
+        boxpoints: false,
+        marker: {
+          color: colors[i] 
+          }
+      };
+    
+      holder[i] = eachtrace;
+    } // if not undefined s close
+  } //i loop close
+
+    var data = holder;
+  
+    var layout = {
+
+    autosize: false,
+      width: 500,
+      height: 1000/varname.length, //maybe make if varname.length == 1 {height = 800} or something
+      margin: {
+          l: 50,
+          r: 50,
+          b: 30,
+          t: 30,
+          pad: 4
+      }, 
+      legend: {xanchor: 'right',
+      bgcolor: '#E2E2E2',
+      bordercolor: '#FFFFFF',
+      borderwidth: 2},
+      title: {
+        text: var_name,
+        font: {
+            family: 'Arial',
+            size: 14 }
+        },
+        yaxis: {
+        title: 'Value'
+        }, //HERE
+      boxmode: 'group'
+     };
+
+    const div = DOM.element('div');
+    Plotly.newPlot(div, data, layout, {responsive: true});
+    return div; 
+
+    } // not undefined var close 
+  } //if password close
+} // function close
+```
+
+<!-- 
+  Profile Plot 
+-->
+
+```{ojs}
+//|output: false
+//Filtering data for profile plots based on inputs on profiles tab
+profileData = data.filter(function(waterFilter) {
+  return year == waterFilter.Year &&
+         month >= waterFilter.Month;
+
+})
+```
+
+
+```{ojs}
+//|echo: false
+//|output: false
+function profile_Plot(var_name) {
+  if (password === correct_password) {
+  //limitation- can only handle 30 traces 
+  //here is where I could make a custom color scheme if I was feeling clever
+
+//filter out so only the correct variable is being used
+    let thisvar = var_name;
+    
+      if (typeof thisvar !== "undefined") { //make sure it is not undefined to avoid errors
+      
+        let df_var = profileData.filter(function(tracefilter){ //filter so that one var at a time is used in each TRACE
+          return thisvar.includes(tracefilter.Variable);
+        })
+      
+    //Now need to filter so that each trace is only one DATE at one SITE. 
+    //Start w/ site:
+     let holder = [] 
+     let secchiholder = []
+     let holdercount = 0 
+     
+    for (let i = 0; i <= site.length; i ++) { //site is an input (array)
+  
+      let thissite = site[i];
+    
+      if (typeof thissite !== "undefined") {
+        let df_site = df_var.filter(function(tracefilter){
+        return thissite.includes(tracefilter.Name) &&
+        month == tracefilter.Month; //month is also an input. This is to cut down on crowdedness in the plot. Should result in 1-3 traces per site. 
+      })
+    
+    let datelist = df_site.map(({Date:actualValue})=>actualValue);
+    
+    let outputArray = [];
+    
+    function removeusingSet(arr) {
+      let outputArray = Array.from(new Set(arr))
+      return outputArray
+    }
+    
+    let unique = removeusingSet(datelist);
+  
+    
+    for (let j = 0; j <= unique.length; j ++) {
+      let thistrace = unique[j] 
+      
+      if (typeof thistrace !== "undefined") {
+        let df = df_site.filter(function(tracefilter){
+        return thistrace.includes(tracefilter.Date);
+      })
+    //Secchi stuff was here
+       
+      let thissecchi = getsecchi(thissite, thistrace)[0];
+       
+      let eachvar_y = 
+        df.map(({Depth:actualValue})=>-actualValue);
+        
+      let eachvar_x = 
+        df.map(({Value:actualValue})=>actualValue);
+    
+      let eachtrace  = {
+        y: eachvar_y,
+        x: eachvar_x,
+       // type: 'scatter',
+        name: thissite+" "+thistrace, 
+        mode: 'lines+markers',
+        marker: {
+          color: colors[holdercount] 
+        }
+      };
+      
+      let secchiholdertemp =  {
+        y: [thissecchi],
+        x: [0],
+        mode: 'markers',
+        type: 'scatter',
+        name: "",
+        showlegend: false,
+        marker: {
+          symbol: 'square',
+          size: 10,
+          color: colors[holdercount] 
+        },
+         hovertemplate: 'Secchi Depth: %{y}m' +
+                        '<br>'+thissite+'<br>' +
+                        thistrace
+      };
+    
+      secchiholder[holdercount] =secchiholdertemp; 
+      holder[holdercount] = eachtrace; //put into list
+      holdercount++; 
+    
+    } //this trace !undefined. Maybe move?
+    } // if not undefined s close
+
+  }// j loop close
+} //i loop close
+    
+     var data = holder.concat(secchiholder);
+
+
+    var layout = {
+      title: {
+      text: var_name,
+      font: {
+          family: 'Arial',
+          size: 14 }
+      },
+       xaxis: {
+        title: 'Value'
+      },
+       yaxis: {
+        title: 'Depth'
+      }, //HERE
+      autosize: false,
+      width: 400,
+      height: 700,
+     // shapes: secchiholder,
+      margin: {
+        l: 30,
+        r: 30,
+        b: 30,
+        t: 30,
+        pad: 4
+  }, 
+      };
+
+  
+    const div = DOM.element("div"); //plots
+    Plotly.newPlot(div, data, layout);
+    return div; 
+    //return secchiholder
+   } // if not undefined i close
+    
+  } //if password close
+
+
+} // function close
+```
+
+```{ojs}
+//|output: false
+//Get y-axis point to add secchi depth to profiel plot
+function getsecchi(site, date) {
+      let thissecchi = profileData.filter(function(secchiFilter){
+        return site.includes(secchiFilter.Name) &&
+        date.includes(secchiFilter.Date) &&
+        "Depth, Secchi disk depth".includes(secchiFilter.Variable);
+      })
+    //  return Inputs.table(thissecchi) 
+      
+      if (thissecchi.length > 0) {
+      let secchiVal = 
+        thissecchi.map(({Value:actualValue})=>-actualValue);
+        return secchiVal;
+      } else {
+        let secchiVal = 0;
+        return secchiVal;
+      
+}
+      
+}
+```
+
+<!-- 
+  MAP FUNCTIONS 
+--> 
+<!--Inspired by https://github.com/kbvernon/hndsr-watersheds-->
+<!--With help from https://stackoverflow.com/questions/25683871/assign-id-to-marker-in-leaflet-->
+
+```{ojs}
+//|output: false
+// Need to extract lists of latitude and longitude from staton.csv to make leaflet markers later.
+//the javascript "map" function just collapses the data into a single array. 
+
+lat = station.map(({Latitude:actualValue})=>actualValue);  //need to turn data into array (list of numbers to display on y-axis)
+      
+long = station.map(({Longitude:actualValue})=>actualValue); //list of dates for x axis
+          
+names = station.map(({Name:actualValue})=>actualValue);
+```
+
+```{ojs}
+// Make pairs of lat long for each selected site
+  function makeArray(sitearray) { //makeArray is a function
+    let sets = [];
+    for (let s = 0; s <= sitearray.length; s ++) { //loops through the length of "names" to make sets
+      let pairs = [];
+      pairs[0] = sitearray[s];
+      pairs[1] = lat[s]
+      pairs[2] = long[s];
+      sets[s] = pairs};
+      return sets;
+  }
+list_of_pairs = [makeArray(names)][0]; //list of pairs is now an ARRAY of arrays, which will be used to make markers.    
+
+```
+
+```{ojs}
+//|output: false
+// results variable for tracking site selections
+mutable results = []; //HERE
+
+```
+
+```{ojs}
+
+//Create icons. These can easily be replaced if you want to change color, size, shape, etc. 
+//waterdrop.png is from a free clipart site. 
+waterIcon = L.icon({
+    iconUrl: 'images/waterdrop.png',
+    iconSize:     [15, 20], // size of the icon
+    iconAnchor:   [5, 12], // point of the icon which will correspond to marker's location
+    popupAnchor:  [-3, -7] // point from which the popup should open relative to the iconAnchor
+});
+
+waterIcon2 = L.icon({
+    iconUrl: 'images/waterdrop.png',
+    iconSize:     [28.6, 37.2], // size of the icon
+    iconAnchor:   [10, 24], // point of the icon which will correspond to marker's location
+    popupAnchor:  [-5, -13] // point from which the popup should open relative to the iconAnchor
+});
+
+
+// indexOf returns index number if e exists, -1 otherwise.
+//This checks to see if marker is already in results list or not. 
+idx = (e) => { return results.indexOf(e.properties.Name); };
+  
+//this is just for popups
+highlightFeature = (e) => {
+
+   // e.target.setStyle(styles.highlight); 
+    //e.target.bringToFront();
+    e.target.openPopup();
+  
+  };
+ //also just for popups 
+resetHighlight = (e) => { 
+
+    //let q = (idx(e.target) < 0) ? styles.basic : styles.select;
+    
+    //e.target.setStyle(q);
+    e.target.closePopup();
+  
+  };
+  
+//This is the important part!!
+toggleFeature = (e) => {
+    //see idx function above 
+    const i = idx(e.target);
+    
+    if (i > -1) { //if the selected point is already in the results list
+            
+     results.splice(i, 1); //remove site from results list and set icon to waterIcon
+     e.target.setIcon(waterIcon);
+     syncMapAndCheckboxes(e.target.properties.Name, false);
+      
+    } else {
+      //if it is not already there, put it there and change icon       
+      results.push(e.target.properties.Name); 
+      e.target.setIcon(waterIcon2);
+      syncMapAndCheckboxes(e.target.properties.Name, true);
+     // treeInput()(e.target.properties.Name);
+
+    };
+   
+  
+ set(viewof site, results); 
+ // set(results, viewof site); 
+
+  };
+
+// Makes markers 
+markers = {
+ if (password === correct_password) {
+ var markers = {};
+    
+    for (var i = 0; i < 74; i++) { //need to replace 74 but putting a variable length here breaks it so I am afraid to. 
+      let id_name = [list_of_pairs[i][0]];
+      //This is in case inputs are selected when map is loaded.
+      //Untested: might break. 
+      function determineIcon(input) {
+        if (results.includes(input)) {
+          return waterIcon2
+          } else {
+          return waterIcon
+         }
+      }
+      //shorthand for this i
+      let name_id = list_of_pairs[i][0]
+      
+      markers[name_id] = new L.marker([list_of_pairs[i][1], list_of_pairs[i][2]],
+      {icon: determineIcon(list_of_pairs[i][0]),
+      options: {Name: list_of_pairs[i][0]}, //this may be unnecessary 
+      id: list_of_pairs[i][0],
+      keyboard: false
+      })  //also this 
+    //Add event listeners 
+      .on('mouseover', highlightFeature)
+      .on('mouseout', resetHighlight)
+      .on('click', toggleFeature)
+      .bindPopup(list_of_pairs[i][0])
+      
+      .addTo(glknParks);
+     //This part allows markers to be called by checkbox inputs by creating an object
+     //Where the key is the site name and the value is the marker. 
+     markers[name_id].properties = {};
+     markers[name_id].properties.Name = list_of_pairs[i][0];
+    
+      
+    } //for loop close
+  
+  return markers;
+ } //if close
+}    
+
+
+```
+```{ojs}
+//|output: false
+// site; // if site changes
+ 
+//Basically the same function as toggleFeature with some slight adjustements. 
+justSelected = () => {
+
+//TO ADD SITES FROM RESULTS -- difference bwtn this and set?   
+ if (site.length >= 0) { //otherwise will throw "undefined", the bane of my existence 
+ //Figure out which sites are not in results. 
+ //Should just be one but it doesn't work unless it's in a loop.
+ //Maybe something to do with extracting the value from array (map might work) but 
+ //it's working so I'm not going to worry about it.
+  let difference1 = site.filter(x => results.indexOf(x) === -1);
+   for (var i = 0; i < difference1.length; i++) {
+      var mysite = difference1[i];
+      markers[mysite].setIcon(waterIcon2);
+      results.push(mysite); //put it into results to merge w/ sites selected from map. 
+      syncMapAndCheckboxes(mysite, true);
+   }
+ }
+ 
+//TO REMOVE SITES
+//Basically the same process backwards. 
+//Figure out which sites are in results still, but not in site anymore: (deselected w/ checkbox)
+ let difference = results.filter(x => site.indexOf(x) === -1);
+ 
+//For each of those, change icon back and remove from results. 
+ if (difference.length >= 0) {
+  for (var j = 0; j < difference.length; j++) { //might not need
+    var mysite = difference[j];
+    markers[mysite].setIcon(waterIcon);
+   const index = results.indexOf(mysite);
+    results.splice(index, 1);
+    syncMapAndCheckboxes(mysite, false);
+ //   const checkboxElement = document.querySelector(`input[name="${mysite}"]`);
+   // checkboxElement.checked = false;
+   // let whichpark = matching(mysite);
+  //  `{whichpark}In`.splice(i, 1);
+    
+  }
+
+ }
+
+}
+
+justSelected(); //always need to remember to call the function!!
+```
+
+
+```{ojs}
+
+// push results to viewof site (site input)
+//This is only called for toggleFeature when sites are clicked from map, 
+//NOT called when sites are selected from checkboxes (to prevent weirdness)
+function set(input, value) {
+  input.value = value;
+  input.dispatchEvent(new Event("input", {bubbles: true}));
+}
+
+```
+
+```{ojs}
+
+//Initiate leaflet map
+L = {
+  const L = await require("leaflet/dist/leaflet.js");
+  if (!L._style) {
+    const href = await require.resolve("leaflet/dist/leaflet.css");
+    document.head.appendChild(L._style = html`<link href=${href} rel=stylesheet>`);
+  }
+
+  return L; //to call leaflet, use "L" (ie L.marker)
+};
+
+```
+
+
+```{ojs}
+
+//Add tiles to the map. 
+//Currently using openstreetmap b/c it doesn't have the loading issue that stamen does. 
+
+glknParks = {
+  
+  let map = L.map(container);
+  
+  var lidarBase = L.tileLayer.wms(
+'https://elevation.nationalmap.gov/arcgis/services/3DEPElevation/ImageServer/WMSServer?',
+
+    {
+        layers: '3DEPElevation:Hillshade Gray',
+        className: 'lidarBase',
+        attribution: 'U.S. Geological Survey National Map - 3D Elevation Program Lidar'
+    }
+);
+
+ var OpenStreetMap_Mapnik = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+	maxZoom: 19,
+	attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map);
+  
+   L.control.layers(
+    {
+      "Open Street Map": OpenStreetMap_Mapnik,
+      "LiDAR": lidarBase
+    },
+    null,
+    {position: 'topleft'}
+  ).addTo(map);
+  
+  L.control.scale().addTo(map);
+  //setView is my best estimation but should be fiddled with later
+  map.setView([44.8, -90], 7);
+
+  return map; 
+
+};
+
+```
+
+<!---
+Outputs
+-->
+
+::::: {.grid}
+:::: {.g-col-3}
+
+::: {.panel-sidebar}
+
+```{ojs}
+
+viewof color_input = Inputs.select(
+  ["default", "natural", "NPS", "roygbiv", "greyscale", "viridis"],
+  {value: "default", label: "Color pallete:"}
+)
+```
+
+```{ojs}
+viewof site = treeInput(mydata, {open: 1})
+```
+
+```{ojs}
+function treeInput(tree, { name = getName, children = getChildren, open = 0, value = []} = {}) {
+  //value starts as blank
+  
+  const id = DOM.uid().id;
+
+  const form = htl.html`<form style=${{
+    fontFamily: "var(--sans-serif)",
+    fontSize: "smaller"
+  }}>
+    ${inner(tree, { open })}
+  </form>`;
+
+  set(value)();
+
+  return form;
+
+  function set(value) {
+    return function () {
+      form.value = value;
+      form.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+  }
+
+  function inner(node, { open } = {}) {
+    const isChecked = value.includes(name(node));
+    const isCheckable = !node.children || node.children.length === 0; // Only allow lowest level children to be checkable
+    const item = htl.html`
+      <label><input type="checkbox" name="${name(node)}" checked=${isChecked} disabled=${!isCheckable} onInput=${setCheckbox(name(node))}>
+      ${name(node)}</label>`;
+    return node.children?.length
+      ? htl.html`<details open=${Boolean(open)}>
+          <summary>${item}</summary>
+          <div style=${{ marginLeft: "24px" }}>
+            ${children(node).map(d => inner(d, { open: open - 1 }))}
+          </div>
+        </details>`
+      : htl.html`<div>${item}</div>`;
+  }
+
+   function setCheckbox(nodeName) {
+    return function () { //?
+      if (value.includes(nodeName)) {
+       value = value.filter(label => label !== nodeName);
+      } else {
+        value = [...value, nodeName];
+      }
+      set(value)();
+    };
+    
+
+  }
+  
+  
+}
+
+
+```
+
+```{ojs}
+// Add a button to your HTML interface
+
+// Define the synchronization function
+function syncMapAndCheckboxes(value, bool) {
+  // Iterate through the results array and update checkboxes and map markers
+  //for (const siteName of results) {
+    // Update checkboxes (you may need to adapt this part based on your actual checkbox implementation)
+    const checkboxElement = document.querySelector(`input[name="${value}"]`);
+    set(viewof site, results);
+  //  if (results.includes(value)) {
+   //     checkboxElement.checked = true
+   //   } else {
+   //     checkboxElement.checked = false
+   //   };
+    checkboxElement.checked = bool;
+    return checkboxElement;
+
+  //}
+}
+
+//syncMapAndCheckboxes();
+
+//checkboxElement
+// Display the button in your notebook
+//button;
+```
+
+
+```{ojs}
+mydata = FileAttachment("nestedParks.json").json()
+```
+
+```{ojs}
+getName = (d) => d.name
+getChildren = (d) => d.children
+```
+
+## Map
+
+<i> Please select a site from checkboxes or on the map.  </i>
+
+```{ojs}
+//|class: leafletMap
+//Container for leaflet map to go into. 
+container = {
+
+  let x = d3.create("div")
+  
+  x.attr("style", `width:100%;height:${window.outerHeight * 0.65}px`);
+  return x.node();
+
+}
+
+```
+
+
+:::
+::::
+
+::::: {.g-col-9}
+:::: {.panel-tabset}
+
+## Plots
+
+::: {.panel-fill layout="[ [1,1] ]"}
+```{ojs}
+//|panel: input
+
+
+//Variable selection
+viewof varname = Inputs.select(
+  data.map(d => d.Variable), 
+  {label: "Variable:", unique: true, sort: true, multiple: true, value: "pH"}
+)
+
+```
+
+```{ojs}
+//|panel: input
+//import {interval} from '@mootari/range-slider'
+
+
+viewof yearIn = Inputs.form([
+Inputs.range([2005, 2024], {
+  step: 1,
+  value: 2005,
+  label: 'Min Year',
+}),
+Inputs.range([2005, 2024], {
+  step: 1,
+  value: 2023,
+  label: 'Max Year',
+})
+])
+
+viewof monthIn = Inputs.form([
+Inputs.range([1, 12], {
+  step: 1,
+  value: 1,
+  label: 'Min Month',
+}),
+Inputs.range([1, 12], {
+  step: 1,
+  value: 12,
+  label: 'Max Month',
+})
+])
+
+viewof depthIn = Inputs.form([
+Inputs.range([0, 55], {
+  step: 0.5,
+  value: 0, 
+  label: 'Min Depth (m)',
+}),
+Inputs.range([0, 55], {
+  step: 0.5,
+  value: 55,
+  label: 'Max Depth (m)',
+})
+])
+
+viewof toggle_boxplot = Inputs.toggle({label: "Boxplot by Year", value: true})
+
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_warning
+{
+if (typeof varname[0] !== "undefined") {
+  return var_Plot(varname[0]);
+} else{
+  return 'Please select a variable to display plots.'
+}
+}
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+box_Plot(varname[0])
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+var_Plot(varname[1]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+box_Plot(varname[1]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+var_Plot(varname[2]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+box_Plot(varname[2]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+var_Plot(varname[3]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+box_Plot(varname[3]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+var_Plot(varname[4]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+box_Plot(varname[4]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+var_Plot(varname[5]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+box_Plot(varname[5]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+var_Plot(varname[6]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+box_Plot(varname[6]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+var_Plot(varname[7]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+box_Plot(varname[7]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+var_Plot(varname[8]);
+```
+
+```{ojs}
+//| echo: false
+//| classes: plotly_plots
+box_Plot(varname[8]);
+```
+:::
+
+```{=html}
+<h3> Data Preview and Download </h3>
+```
+
+```{ojs}
+button = (data, filename = 'data.csv') => {
+  if (!data) throw new Error('Array of data required as first argument');
+
+  let downloadData;
+  if (filename.includes('.csv')) {
+    downloadData = new Blob([d3.csvFormat(data)], { type: "text/csv" });
+  } else {
+    downloadData = new Blob([JSON.stringify(data, null, 2)], {
+      type: "application/json"
+    });
+  }
+
+  const size = (downloadData.size / 1024).toFixed(0);
+  const button = DOM.download(
+    downloadData,
+    filename,
+    `Download (~${size} KB)`
+  );
+  return button;
+}
+```
+
+
+```{ojs}
+//| echo: false
+
+{if (password === correct_password) {
+  
+  return Inputs.table(filtered)
+
+
+{const buttondiv = DOM.element('buttondiv');
+  const csvBtn = button(filtered, 'glknWaterQualityFiltered.csv');
+  const csvText = md`##### Download filtered data as csv:`
+   buttondiv.appendChild(csvText);
+  buttondiv.appendChild(csvBtn);
+  return buttondiv; 
+  }
+}
+}
+```
+
+
+## Profiles
+```{ojs}
+//|panel: input
+viewof month = Inputs.range(
+  [4, 11], 
+  {value: 7, step: 1, label: "Season:" }
+)
+
+viewof year = Inputs.range(
+  [2007, 2023], 
+  {value: 2008, step: 1, label: "Year:" }
+)
+```
+
+::: {.panel-fill layout="[ [1,1,1,1] ]"}
+```{ojs}
+profile_Plot("Temperature, water")
+```
+
+```{ojs}
+profile_Plot("Dissolved oxygen (DO)")
+```
+
+```{ojs}
+profile_Plot("Specific conductance")
+```
+
+```{ojs}
+profile_Plot("pH")
+```
+:::
+
+## Information
+```{=html}
+<h3> Learn More </h3>
+<p> For the water quality data collection protocol, see <a href = "https://irma.nps.gov/DataStore/Reference/Profile/2290010">IRMA</a> </p>
+<p> For more informtation about Great Lakes Inventory and Monitoring, see <a href= "https://www.nps.gov/im/glkn/index.htm"> www.nps.gov/im/glkn/</a> </p>
+```
+
+::::
+
+:::::
+
+:::::
